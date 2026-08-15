@@ -9,10 +9,44 @@ import {
   MessageCircle,
   Building2,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+  RadarChart,
+  Radar,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
 
-const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLZUqnpDkpLFZOzW-ugkrc11ZtcLMt6AM4ea7ExhBIKPF6TAMKBwExkbs8Hf_JaRhoWtIukhfMz0Fq/pub?gid=0&single=true&output=csv";
+const SHEET_CITIES_URL = "لینک شیت شهرها";
+const SHEET_TAGS_URL = "لینک شیت issue_tags_v3";
+const SHEET_CATEGORIES_URL = "لینک شیت issue_categories_v3";
+const SHEET_COMMENTS_URL = "لینک شیت Comments";
+const SHEET_DAILY_URL = "لینک شیت Daily";
+const SHEET_DAILY_ISSUES_URL = "لینک شیت DailyIssues";
 
 const TABS = ["رتبه‌بندی شهرها", "تفکیک مشکلات", "روند زمانی", "مقایسه دوبه‌دو"];
+
+const CATEGORY_COLORS = {
+  "عملکرد رستوران": "bg-rose-400",
+  "دلیوری": "bg-pink-400",
+  "پشتیبانی": "bg-violet-400",
+  "عملکرد پلتفرم": "bg-amber-400",
+  "پیدا نکردن رستوران موردنظر": "bg-emerald-400",
+};
+
+const ISSUE_LINE_COLORS = ["#ec4899", "#f43f5e", "#f59e0b", "#8b5cf6", "#10b981"];
 
 function scoreColor(v, mid = 70) {
   if (v >= mid + 10) return "text-emerald-600";
@@ -20,17 +54,32 @@ function scoreColor(v, mid = 70) {
   return "text-rose-600";
 }
 
+function shortDate(d) {
+  return d ? d.slice(5) : d;
+}
+
+function fetchCsv(url) {
+  return fetch(url)
+    .then((res) => res.text())
+    .then((csvText) => Papa.parse(csvText, { header: true, skipEmptyLines: true }).data);
+}
+
 export default function App() {
   const [cities, setCities] = useState([]);
+  const [tags, setTags] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [comments, setComments] = useState([]);
+  const [daily, setDaily] = useState([]);
+  const [dailyIssues, setDailyIssues] = useState([]);
   const [tab, setTab] = useState(0);
   const [sortKey, setSortKey] = useState("deliverySat");
+  const [cityA, setCityA] = useState("");
+  const [cityB, setCityB] = useState("");
 
   useEffect(() => {
-    fetch(SHEET_CSV_URL)
-      .then((res) => res.text())
-      .then((csvText) => {
-        const parsed = Papa.parse(csvText, { header: true, skipEmptyLines: true });
-        const rows = parsed.data.map((r) => ({
+    fetchCsv(SHEET_CITIES_URL)
+      .then((data) => {
+        const parsed = data.map((r) => ({
           name: r["شهر"],
           deliverySat: Number(r["رضایت ارسال"]),
           orderScore: Number(r["امتیاز سفارش"]),
@@ -40,15 +89,62 @@ export default function App() {
           reviews: Number(r["تعداد نظرات"]),
           alert: Number(r["سیگنال هشدار"]) || 0,
         }));
-        setCities(rows);
+        setCities(parsed);
+        const byReviews = [...parsed].sort((a, b) => b.reviews - a.reviews);
+        if (byReviews[0]) setCityA(byReviews[0].name);
+        if (byReviews[1]) setCityB(byReviews[1].name);
       })
-      .catch((err) => console.error("خطا در خواندن گوگل‌شیت:", err));
+      .catch((err) => console.error("خطا در خواندن شیت شهرها:", err));
+
+    fetchCsv(SHEET_TAGS_URL)
+      .then((data) =>
+        setTags(
+          data
+            .map((r) => ({ label: r["label"], category: r["category"], subcode: r["subcode"], count: Number(r["تعداد"]) }))
+            .filter((t) => t.label)
+        )
+      )
+      .catch((err) => console.error("خطا در خواندن شیت Tags:", err));
+
+    fetchCsv(SHEET_CATEGORIES_URL)
+      .then((data) => setCategories(data.map((r) => ({ category: r["دسته"], count: Number(r["تعداد"]) })).filter((c) => c.category)))
+      .catch((err) => console.error("خطا در خواندن شیت Categories:", err));
+
+    fetchCsv(SHEET_COMMENTS_URL)
+      .then((data) =>
+        setComments(
+          data
+            .map((r) => ({
+              date: (r["تاریخ"] || "").slice(0, 10),
+              city: r["شهر"],
+              text: r["نظر"],
+              tags: (r["برچسب‌ها"] || "").split("،").map((t) => t.trim()).filter(Boolean),
+            }))
+            .filter((c) => c.text)
+        )
+      )
+      .catch((err) => console.error("خطا در خواندن شیت Comments:", err));
+
+    fetchCsv(SHEET_DAILY_URL)
+      .then((data) =>
+        setDaily(
+          data.map((r) => ({
+            date: r["تاریخ"],
+            reviews: Number(r["تعداد نظرات"]),
+            avgScore: Number(r["میانگین امتیاز"]),
+            positive: Number(r["مثبت"]),
+            negative: Number(r["منفی"]),
+          }))
+        )
+      )
+      .catch((err) => console.error("خطا در خواندن شیت Daily:", err));
+
+    fetchCsv(SHEET_DAILY_ISSUES_URL)
+      .then((data) => setDailyIssues(data))
+      .catch((err) => console.error("خطا در خواندن شیت DailyIssues:", err));
   }, []);
 
-  const rows = useMemo(
-    () => [...cities].sort((a, b) => b[sortKey] - a[sortKey]),
-    [cities, sortKey]
-  );
+  const rows = useMemo(() => [...cities].sort((a, b) => b[sortKey] - a[sortKey]), [cities, sortKey]);
 
   const kpis = useMemo(() => {
     if (cities.length === 0) return null;
@@ -58,6 +154,31 @@ export default function App() {
     const highest = [...cities].sort((a, b) => b.deliverySat - a.deliverySat)[0];
     return { worstIssueCity, mostReviewed, lowest, highest };
   }, [cities]);
+
+  const topTags = useMemo(() => [...tags].sort((a, b) => b.count - a.count).slice(0, 10), [tags]);
+  const maxTopTagCount = useMemo(() => Math.max(1, ...topTags.map((t) => t.count)), [topTags]);
+  const allTagsSorted = useMemo(() => [...tags].sort((a, b) => b.count - a.count), [tags]);
+  const maxAllTagCount = useMemo(() => Math.max(1, ...allTagsSorted.map((t) => t.count)), [allTagsSorted]);
+
+  const issueLineKeys = useMemo(
+    () => (dailyIssues.length > 0 ? Object.keys(dailyIssues[0]).filter((k) => k !== "تاریخ") : []),
+    [dailyIssues]
+  );
+
+  const dataA = useMemo(() => cities.find((c) => c.name === cityA), [cities, cityA]);
+  const dataB = useMemo(() => cities.find((c) => c.name === cityB), [cities, cityB]);
+
+  const radarData = useMemo(() => {
+    if (!dataA || !dataB) return [];
+    const alertScore = (c) => Math.max(0, 100 - (c.alert / Math.max(1, c.reviews)) * 1000);
+    return [
+      { metric: "رضایت ارسال", A: dataA.deliverySat, B: dataB.deliverySat },
+      { metric: "امتیاز سفارش", A: Math.round(dataA.orderScore * 20), B: Math.round(dataB.orderScore * 20) },
+      { metric: "درصد مثبت", A: dataA.pos, B: dataB.pos },
+      { metric: "کم‌بودن نارضایتی", A: 100 - dataA.neg, B: 100 - dataB.neg },
+      { metric: "کم‌بودن هشدار", A: Math.round(alertScore(dataA)), B: Math.round(alertScore(dataB)) },
+    ];
+  }, [dataA, dataB]);
 
   if (cities.length === 0) {
     return (
@@ -69,13 +190,10 @@ export default function App() {
 
   return (
     <div dir="rtl" className="min-h-screen bg-gray-50 text-gray-800 font-sans">
-      {/* Header */}
       <div className="bg-white border-b border-gray-100">
         <div className="max-w-7xl mx-auto flex items-center justify-between px-6 py-5">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-pink-600 flex items-center justify-center text-white font-bold text-sm">
-              اف
-            </div>
+            <div className="w-9 h-9 rounded-xl bg-pink-600 flex items-center justify-center text-white font-bold text-sm">اف</div>
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-base font-bold text-gray-900">داشبورد نظرسنجی بعد از سفارش</h1>
@@ -92,7 +210,6 @@ export default function App() {
       </div>
 
       <div className="max-w-7xl mx-auto px-6 py-6">
-        {/* KPI row */}
         <div className="grid grid-cols-5 gap-4 mb-6">
           <KpiCard icon={AlertTriangle} label="داغ‌ترین مشکل ارسال" value={kpis.worstIssueCity.name} sub={`${kpis.worstIssueCity.alert} هشدار`} accent="pink" />
           <KpiCard icon={MessageCircle} label="پرحجم‌ترین بازخورد" value={kpis.mostReviewed.name} sub={`${kpis.mostReviewed.reviews.toLocaleString("fa-IR")} نظر`} accent="gray" />
@@ -101,16 +218,13 @@ export default function App() {
           <KpiCard icon={Building2} label="شهرهای رصدشده" value={cities.length} sub="در حال جمع‌آوری" accent="gray" />
         </div>
 
-        {/* Tabs (segmented pill control) */}
         <div className="inline-flex items-center gap-1 bg-gray-100 rounded-full p-1 mb-4">
           {TABS.map((t, i) => (
             <button
               key={t}
               onClick={() => setTab(i)}
               className={`px-4 py-1.5 text-sm rounded-full transition-colors ${
-                tab === i
-                  ? "bg-white text-pink-600 font-medium shadow-sm"
-                  : "text-gray-500 hover:text-gray-700"
+                tab === i ? "bg-white text-pink-600 font-medium shadow-sm" : "text-gray-500 hover:text-gray-700"
               }`}
             >
               {t}
@@ -118,77 +232,273 @@ export default function App() {
           ))}
         </div>
 
-        {/* Panel */}
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
-          {tab === 0 ? (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-sm font-bold text-gray-900">رتبه‌بندی شهرها</h2>
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  مرتب‌سازی بر اساس
-                  <select
-                    value={sortKey}
-                    onChange={(e) => setSortKey(e.target.value)}
-                    className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-700"
-                  >
-                    <option value="deliverySat">رضایت ارسال</option>
-                    <option value="orderScore">امتیاز سفارش</option>
-                    <option value="reviews">تعداد نظرات</option>
-                    <option value="alert">هشدار</option>
-                  </select>
+        {tab === 0 && (
+          <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-sm font-bold text-gray-900">رتبه‌بندی شهرها</h2>
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                مرتب‌سازی بر اساس
+                <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-700">
+                  <option value="deliverySat">رضایت ارسال</option>
+                  <option value="orderScore">امتیاز سفارش</option>
+                  <option value="reviews">تعداد نظرات</option>
+                  <option value="alert">هشدار</option>
+                </select>
+              </div>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-gray-400 text-xs border-b border-gray-100">
+                  <th className="text-right py-2 font-normal">#</th>
+                  <th className="text-right py-2 font-normal">شهر</th>
+                  <th className="text-right py-2 font-normal">رضایت ارسال</th>
+                  <th className="text-right py-2 font-normal">امتیاز سفارش</th>
+                  <th className="text-right py-2 font-normal">توزیع احساسات کامنت‌ها</th>
+                  <th className="text-right py-2 font-normal">تعداد نظرات</th>
+                  <th className="text-right py-2 font-normal">سیگنال هشدار</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((c, i) => (
+                  <tr key={c.name} className={`border-b border-gray-50 hover:bg-gray-50 ${i % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                    <td className="py-3 text-gray-400">{i + 1}</td>
+                    <td className="py-3 text-gray-900 font-medium">{c.name}</td>
+                    <td className={`py-3 font-mono ${scoreColor(c.deliverySat)}`}>{c.deliverySat}%</td>
+                    <td className="py-3 font-mono text-gray-700">★ {c.orderScore.toFixed(2)}</td>
+                    <td className="py-3 w-40">
+                      <div className="flex h-2 rounded-full overflow-hidden bg-gray-100">
+                        <div className="bg-emerald-400" style={{ width: `${c.pos}%` }} />
+                        <div className="bg-gray-300" style={{ width: `${c.neu}%` }} />
+                        <div className="bg-rose-400" style={{ width: `${c.neg}%` }} />
+                      </div>
+                    </td>
+                    <td className="py-3 text-gray-500 font-mono">{c.reviews.toLocaleString("fa-IR")}</td>
+                    <td className="py-3">
+                      {c.alert > 0 ? (
+                        <span className="inline-flex items-center gap-1 text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">
+                          <AlertTriangle className="w-3 h-3" /> {c.alert}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300 text-xs">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {tab === 1 && (
+          <div className="space-y-4">
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-900 mb-1">مشکلات نظرسنجی — نمای کلی</h2>
+              <p className="text-xs text-gray-400 mb-4">پرتکرارترین مشکلات در همه‌ی شهرها</p>
+              <div className="space-y-2.5">
+                {topTags.map((t) => (
+                  <div key={t.subcode} className="flex items-center gap-3">
+                    <div className="w-16 shrink-0 text-xs text-gray-500 font-mono">{t.count.toLocaleString("fa-IR")}</div>
+                    <div className="flex-1 h-6 bg-gray-50 rounded-md overflow-hidden">
+                      <div className={`h-full rounded-md ${CATEGORY_COLORS[t.category] || "bg-gray-400"}`} style={{ width: `${(t.count / maxTopTagCount) * 100}%` }} />
+                    </div>
+                    <div className="w-64 shrink-0 text-sm text-gray-700">
+                      {t.label} <span className="text-gray-400">({t.category})</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-5 gap-4">
+              <div className="col-span-2 bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+                <h2 className="text-sm font-bold text-gray-900 mb-4">دسته‌بندی مشکلات</h2>
+                <div className="space-y-3">
+                  {categories.map((c) => (
+                    <div key={c.category} className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${CATEGORY_COLORS[c.category] || "bg-gray-400"}`} />
+                        <span className="text-sm text-gray-700">{c.category}</span>
+                      </div>
+                      <span className="text-sm font-bold text-gray-900 font-mono">{c.count.toLocaleString("fa-IR")}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-gray-400 text-xs border-b border-gray-100">
-                    <th className="text-right py-2 font-normal">#</th>
-                    <th className="text-right py-2 font-normal">شهر</th>
-                    <th className="text-right py-2 font-normal">رضایت ارسال</th>
-                    <th className="text-right py-2 font-normal">امتیاز سفارش</th>
-                    <th className="text-right py-2 font-normal">توزیع احساسات کامنت‌ها</th>
-                    <th className="text-right py-2 font-normal">تعداد نظرات</th>
-                    <th className="text-right py-2 font-normal">سیگنال هشدار</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((c, i) => (
-                    <tr key={c.name} className={`border-b border-gray-50 hover:bg-gray-50 ${i % 2 === 1 ? "bg-gray-50/40" : ""}`}>
-                      <td className="py-3 text-gray-400">{i + 1}</td>
-                      <td className="py-3 text-gray-900 font-medium">{c.name}</td>
-                      <td className={`py-3 font-mono ${scoreColor(c.deliverySat)}`}>{c.deliverySat}%</td>
-                      <td className="py-3 font-mono text-gray-700">★ {c.orderScore.toFixed(2)}</td>
-                      <td className="py-3 w-40">
-                        <div className="flex h-2 rounded-full overflow-hidden bg-gray-100">
-                          <div className="bg-emerald-400" style={{ width: `${c.pos}%` }} />
-                          <div className="bg-gray-300" style={{ width: `${c.neu}%` }} />
-                          <div className="bg-rose-400" style={{ width: `${c.neg}%` }} />
-                        </div>
-                      </td>
-                      <td className="py-3 text-gray-500 font-mono">{c.reviews.toLocaleString("fa-IR")}</td>
-                      <td className="py-3">
-                        {c.alert > 0 ? (
-                          <span className="inline-flex items-center gap-1 text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">
-                            <AlertTriangle className="w-3 h-3" /> {c.alert}
-                          </span>
-                        ) : (
-                          <span className="text-gray-300 text-xs">—</span>
-                        )}
-                      </td>
-                    </tr>
+              <div className="col-span-3 bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+                <h2 className="text-sm font-bold text-gray-900 mb-4">تگ‌های مشکل — اسنپ‌فود</h2>
+                <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+                  {allTagsSorted.map((t) => (
+                    <div key={t.subcode} className="flex items-center gap-2">
+                      <div className="w-12 shrink-0 text-xs text-gray-500 font-mono">{t.count.toLocaleString("fa-IR")}</div>
+                      <div className="flex-1 h-5 bg-gray-50 rounded-md overflow-hidden">
+                        <div className={`h-full rounded-md ${CATEGORY_COLORS[t.category] || "bg-gray-400"}`} style={{ width: `${(t.count / maxAllTagCount) * 100}%` }} />
+                      </div>
+                      <div className="w-40 shrink-0 text-xs text-gray-700">{t.label}</div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
-            </>
-          ) : (
-            <div className="flex flex-col items-center justify-center py-20 text-gray-300 text-sm gap-2">
-              <Flame className="w-6 h-6" />
-              این بخش («{TABS[tab]}») در نسخه بعدی اضافه می‌شود
+                </div>
+              </div>
             </div>
-          )}
-        </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-900 mb-1">نمونه نظرات منفی — اسنپ‌فود</h2>
+              <p className="text-xs text-gray-400 mb-4">آخرین نظرات منفی ثبت‌شده به همراه برچسب‌های مرتبط</p>
+              <div className="max-h-96 overflow-y-auto space-y-3 pr-1">
+                {comments.map((c, i) => (
+                  <div key={i} className="border border-gray-100 rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs text-gray-400">{c.city}</span>
+                      <span className="text-xs text-gray-300 font-mono">{c.date}</span>
+                    </div>
+                    <p className="text-sm text-gray-800 mb-2">{c.text}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {c.tags.map((tag) => (
+                        <span key={tag} className="text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {tab === 2 && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+                <h2 className="text-sm font-bold text-gray-900 mb-1">حجم بازخورد</h2>
+                <p className="text-xs text-gray-400 mb-4">تعداد نظرات ثبت‌شده در هر روز</p>
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={daily}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                    <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                    <Tooltip labelFormatter={shortDate} />
+                    <Bar dataKey="reviews" name="تعداد نظرات" fill="#f472b6" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+                <h2 className="text-sm font-bold text-gray-900 mb-1">روند امتیاز</h2>
+                <p className="text-xs text-gray-400 mb-4">میانگین امتیاز سفارش در هر روز</p>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={daily}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                    <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                    <YAxis domain={[1, 5]} tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                    <Tooltip labelFormatter={shortDate} />
+                    <Line type="monotone" dataKey="avgScore" name="میانگین امتیاز" stroke="#ec4899" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-900 mb-1">روند احساسات</h2>
+              <p className="text-xs text-gray-400 mb-4">تعداد پاسخ‌های مثبت / منفی در هر روز</p>
+              <ResponsiveContainer width="100%" height={240}>
+                <AreaChart data={daily}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                  <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                  <Tooltip labelFormatter={shortDate} />
+                  <Legend />
+                  <Area type="monotone" dataKey="positive" name="مثبت" stroke="#10b981" fill="#10b98122" strokeWidth={2} />
+                  <Area type="monotone" dataKey="negative" name="منفی" stroke="#f43f5e" fill="#f43f5e22" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+              <h2 className="text-sm font-bold text-gray-900 mb-1">روند مشکلات</h2>
+              <p className="text-xs text-gray-400 mb-4">۵ مشکل پرتکرار در طول زمان — ببین کدام مشکل بیشتر/کمتر شده</p>
+              <ResponsiveContainer width="100%" height={260}>
+                <LineChart data={dailyIssues}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="تاریخ" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                  <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} />
+                  <Tooltip labelFormatter={shortDate} />
+                  <Legend />
+                  {issueLineKeys.map((key, i) => (
+                    <Line key={key} type="monotone" dataKey={key} stroke={ISSUE_LINE_COLORS[i % ISSUE_LINE_COLORS.length]} strokeWidth={2} dot={false} />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+
+        {tab === 3 && (
+          <div className="space-y-4">
+            <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
+              <div className="flex items-center gap-3 mb-5">
+                <span className="text-sm text-gray-500">مقایسه</span>
+                <select value={cityA} onChange={(e) => setCityA(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-pink-600 font-medium">
+                  {cities.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+                <span className="text-sm text-gray-500">در برابر</span>
+                <select value={cityB} onChange={(e) => setCityB(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 font-medium">
+                  {cities.map((c) => (
+                    <option key={c.name} value={c.name}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {dataA && dataB && (
+                <div className="grid grid-cols-2 gap-6">
+                  <ResponsiveContainer width="100%" height={280}>
+                    <RadarChart data={radarData}>
+                      <PolarGrid stroke="#f3f4f6" />
+                      <PolarAngleAxis dataKey="metric" tick={{ fontSize: 11, fill: "#6b7280" }} />
+                      <PolarRadiusAxis tick={{ fontSize: 10, fill: "#d1d5db" }} domain={[0, 100]} />
+                      <Radar name={cityA} dataKey="A" stroke="#ec4899" fill="#ec489933" strokeWidth={2} />
+                      <Radar name={cityB} dataKey="B" stroke="#6b7280" fill="#6b728033" strokeWidth={2} />
+                      <Legend />
+                      <Tooltip />
+                    </RadarChart>
+                  </ResponsiveContainer>
+
+                  <table className="w-full text-sm self-center">
+                    <thead>
+                      <tr className="text-gray-400 text-xs border-b border-gray-100">
+                        <th className="text-right py-2 font-normal">{cityA}</th>
+                        <th className="text-center py-2 font-normal">متریک</th>
+                        <th className="text-left py-2 font-normal">{cityB}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <CompareRow label="رضایت ارسال" a={`${dataA.deliverySat}%`} b={`${dataB.deliverySat}%`} />
+                      <CompareRow label="امتیاز سفارش" a={dataA.orderScore.toFixed(2)} b={dataB.orderScore.toFixed(2)} />
+                      <CompareRow label="درصد مثبت" a={`${dataA.pos}%`} b={`${dataB.pos}%`} />
+                      <CompareRow label="درصد منفی" a={`${dataA.neg}%`} b={`${dataB.neg}%`} />
+                      <CompareRow label="تعداد نظرات" a={dataA.reviews.toLocaleString("fa-IR")} b={dataB.reviews.toLocaleString("fa-IR")} />
+                      <CompareRow label="سیگنال هشدار" a={dataA.alert.toLocaleString("fa-IR")} b={dataB.alert.toLocaleString("fa-IR")} />
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function CompareRow({ label, a, b }) {
+  return (
+    <tr className="border-b border-gray-50">
+      <td className="py-2.5 text-gray-900 font-mono">{a}</td>
+      <td className="py-2.5 text-center text-gray-400 text-xs">{label}</td>
+      <td className="py-2.5 text-gray-700 font-mono text-left">{b}</td>
+    </tr>
   );
 }
 
