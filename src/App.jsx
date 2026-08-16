@@ -1,13 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import Papa from "papaparse";
 import {
   AlertTriangle,
   Circle,
-  Flame,
   TrendingDown,
   TrendingUp,
   MessageCircle,
   Building2,
+  ShieldCheck,
+  Filter,
+  ChevronDown,
+  X,
+  Search,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -35,6 +39,7 @@ const SHEET_CATEGORIES_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS
 const SHEET_COMMENTS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLZUqnpDkpLFZOzW-ugkrc11ZtcLMt6AM4ea7ExhBIKPF6TAMKBwExkbs8Hf_JaRhoWtIukhfMz0Fq/pub?gid=1000952147&single=true&output=csv";
 const SHEET_DAILY_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLZUqnpDkpLFZOzW-ugkrc11ZtcLMt6AM4ea7ExhBIKPF6TAMKBwExkbs8Hf_JaRhoWtIukhfMz0Fq/pub?gid=1628769736&single=true&output=csv";
 const SHEET_DAILY_ISSUES_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSLZUqnpDkpLFZOzW-ugkrc11ZtcLMt6AM4ea7ExhBIKPF6TAMKBwExkbs8Hf_JaRhoWtIukhfMz0Fq/pub?gid=1058088689&single=true&output=csv";
+
 const TABS = ["رتبه‌بندی شهرها", "تفکیک مشکلات", "روند زمانی", "مقایسه دوبه‌دو"];
 const MONTHS = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"];
 const YEARS = Array.from({ length: 11 }, (_, i) => 1395 + i);
@@ -49,7 +54,57 @@ const CATEGORY_COLORS = {
 };
 const ISSUE_LINE_COLORS = ["#ec4899", "#f43f5e", "#f59e0b", "#8b5cf6", "#10b981"];
 
-// --- Persian digit helpers (used EVERYWHERE a number/date is shown) ---
+const MIN_REVIEWS_OPTIONS = [
+  { value: 0, label: "همه" },
+  { value: 50, label: "≥ ۵۰ نظر" },
+  { value: 100, label: "≥ ۱۰۰ نظر" },
+  { value: 200, label: "≥ ۲۰۰ نظر" },
+  { value: 500, label: "≥ ۵۰۰ نظر" },
+  { value: 1000, label: "≥ ۱۰۰۰ نظر" },
+];
+
+// ===================== Official Tier Map (from provided list) =====================
+const CITY_TIER_MAP = {
+  // Tier 0
+  "تهران": 0,
+
+  // Tier 1
+  "اصفهان": 1,
+  "تبریز": 1,
+  "کرج": 1,
+  "مشهد": 1,
+  "شیراز": 1,
+  "اهواز": 1,
+  "قم": 1,
+
+  // Tier 2
+  "رشت": 2,
+  "ارومیه": 2,
+  "همدان": 2,
+  "قزوین": 2,
+  "کرمانشاه": 2,
+  "بوشهر": 2,
+  "کرمان": 2,
+  "بندرعباس": 2,
+  "اراک": 2,
+  "یزد": 2,
+  "شهر ری": 2,
+  "اردبیل": 2,
+  "ساری": 2,
+  "سنندج": 2,
+  "گرگان": 2,
+  "اسلامشهر": 2,
+  "خرم آباد": 2,
+  "زاهدان": 2,
+  "زنجان": 2,
+};
+
+// Default for any city not in the map → Tier 3
+function getOfficialTier(cityName) {
+  return CITY_TIER_MAP[cityName] ?? 3;
+}
+
+// --- Persian digit helpers ---
 const FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
 function faStr(input) {
   return String(input).replace(/[0-9]/g, (d) => FA_DIGITS[d]);
@@ -104,6 +159,12 @@ function jalaliToGregorian(jy, jm, jd) {
   return new Date(gy, gm - 1, gd);
 }
 
+function getCredibility(reviews) {
+  if (reviews >= 200) return { label: "بالا", level: "high", cls: "bg-emerald-50 text-emerald-700 border-emerald-200" };
+  if (reviews >= 50) return { label: "متوسط", level: "mid", cls: "bg-amber-50 text-amber-700 border-amber-200" };
+  return { label: "پایین", level: "low", cls: "bg-rose-50 text-rose-700 border-rose-200" };
+}
+
 function FilterBar({ range, setRange, preset, setPreset, maxDataDate }) {
   const applyPreset = (key, months) => {
     setPreset(key);
@@ -122,7 +183,7 @@ function FilterBar({ range, setRange, preset, setPreset, maxDataDate }) {
   };
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm px-4 py-3 mb-4 flex items-center justify-between flex-wrap gap-3">
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm px-4 py-3 mb-3 flex items-center justify-between flex-wrap gap-3">
       <div className="flex items-center gap-2 text-xs text-gray-500">
         <span className="font-medium text-gray-700">بازه‌ی تحلیل</span>
         <span>از</span>
@@ -157,6 +218,203 @@ function FilterBar({ range, setRange, preset, setPreset, maxDataDate }) {
   );
 }
 
+// ===================== City Multi-Select Dropdown =====================
+function CityDropdown({ availableCities, selectedCities, setSelectedCities }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = search.trim();
+    if (!q) return availableCities;
+    return availableCities.filter((c) => c.name.includes(q));
+  }, [availableCities, search]);
+
+  const toggle = (name) => {
+    setSelectedCities((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
+    );
+  };
+
+  const selectAll = () => {
+    setSelectedCities(availableCities.map((c) => c.name));
+  };
+
+  const clearAll = () => setSelectedCities([]);
+
+  const label =
+    selectedCities.length === 0
+      ? "همه شهرها"
+      : selectedCities.length === 1
+      ? selectedCities[0]
+      : `${faStr(selectedCities.length)} شهر انتخاب شده`;
+
+  return (
+    <div className="relative min-w-[220px]" ref={ref}>
+      <label className="text-xs text-gray-500 mb-1 block">فیلتر شهر</label>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between gap-2 bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 hover:border-pink-300 transition-colors"
+      >
+        <span className="truncate">{label}</span>
+        <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      {open && (
+        <div className="absolute z-50 mt-1 w-full min-w-[260px] bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+          {/* Search */}
+          <div className="p-2 border-b border-gray-100">
+            <div className="relative">
+              <Search className="absolute right-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="جستجوی شهر..."
+                className="w-full bg-gray-50 border border-gray-200 rounded-lg pr-8 pl-2 py-1.5 text-sm focus:outline-none focus:border-pink-300"
+                autoFocus
+              />
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-50 text-xs">
+            <button onClick={selectAll} className="text-pink-600 hover:text-pink-700">انتخاب همه</button>
+            <button onClick={clearAll} className="text-gray-400 hover:text-gray-600">پاک کردن</button>
+          </div>
+
+          {/* List */}
+          <div className="max-h-56 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-gray-400">شهری یافت نشد</div>
+            ) : (
+              filtered.map((c) => {
+                const checked = selectedCities.includes(c.name);
+                return (
+                  <label
+                    key={c.name}
+                    className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(c.name)}
+                      className="rounded border-gray-300 text-pink-600 focus:ring-pink-500"
+                    />
+                    <span className="flex-1 truncate">{c.name}</span>
+                    <span className="text-[10px] text-gray-400">Tier {faStr(c.tier)}</span>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CityTierFilter({
+  cities,
+  selectedCities,
+  setSelectedCities,
+  selectedTiers,
+  setSelectedTiers,
+  minReviews,
+  setMinReviews,
+}) {
+  const toggleTier = (tier) => {
+    setSelectedTiers((prev) => {
+      const next = prev.includes(tier) ? prev.filter((t) => t !== tier) : [...prev, tier];
+      // When tiers change, clear city selection that no longer belong to remaining tiers
+      return next;
+    });
+  };
+
+  // Cities available in the dropdown = filtered by selected tiers (if any)
+  const availableCities = useMemo(() => {
+    if (selectedTiers.length === 0) return cities;
+    return cities.filter((c) => selectedTiers.includes(c.tier));
+  }, [cities, selectedTiers]);
+
+  // Keep selectedCities clean when tiers change
+  useEffect(() => {
+    if (selectedTiers.length === 0) return;
+    setSelectedCities((prev) =>
+      prev.filter((name) => {
+        const city = cities.find((c) => c.name === name);
+        return city && selectedTiers.includes(city.tier);
+      })
+    );
+  }, [selectedTiers, cities, setSelectedCities]);
+
+  return (
+    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm px-4 py-3 mb-4">
+      <div className="flex items-center gap-2 mb-3 text-xs text-gray-500">
+        <Filter className="w-3.5 h-3.5" />
+        <span className="font-medium text-gray-700">فیلتر شهر، Tier و اعتبار</span>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-4">
+        {/* Min Reviews */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500">حداقل تعداد نظرات (اعتبار)</label>
+          <select
+            value={minReviews}
+            onChange={(e) => setMinReviews(Number(e.target.value))}
+            className="bg-gray-50 border border-gray-200 rounded-lg px-2.5 py-1.5 text-sm text-gray-700 min-w-[140px]"
+          >
+            {MIN_REVIEWS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </div>
+
+        {/* Tiers */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs text-gray-500">Tier </label>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {[0, 1, 2, 3].map((t) => (
+              <button
+                key={t}
+                onClick={() => toggleTier(t)}
+                className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                  selectedTiers.includes(t)
+                    ? "bg-pink-50 text-pink-600 border-pink-200 font-medium"
+                    : "bg-gray-50 text-gray-500 border-gray-200 hover:bg-gray-100"
+                }`}
+              >
+                Tier {faStr(t)}
+              </button>
+            ))}
+            {selectedTiers.length > 0 && (
+              <button onClick={() => setSelectedTiers([])} className="text-xs text-gray-400 hover:text-gray-600 px-1">
+                پاک کردن
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* City Dropdown */}
+        <CityDropdown
+          availableCities={availableCities}
+          selectedCities={selectedCities}
+          setSelectedCities={setSelectedCities}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [cities, setCities] = useState([]);
   const [tags, setTags] = useState([]);
@@ -171,19 +429,30 @@ export default function App() {
   const [preset, setPreset] = useState("all");
   const [range, setRange] = useState({ fromY: 1395, fromM: 1, fromD: 1, toY: 1405, toM: 12, toD: 29 });
 
+  // Filters
+  const [selectedCities, setSelectedCities] = useState([]);
+  const [selectedTiers, setSelectedTiers] = useState([]);
+  const [minReviews, setMinReviews] = useState(50);
+
   useEffect(() => {
     fetchCsv(SHEET_CITIES_URL)
       .then((data) => {
-        const parsed = data.map((r) => ({
-          name: r["شهر"],
-          deliverySat: Number(r["رضایت ارسال"]),
-          orderScore: Number(r["امتیاز سفارش"]),
-          pos: Number(r["درصد مثبت"]),
-          neu: Number(r["درصد خنثی"]),
-          neg: Number(r["درصد منفی"]),
-          reviews: Number(r["تعداد نظرات"]),
-          alert: Number(r["سیگنال هشدار"]) || 0,
-        }));
+        const parsed = data.map((r) => {
+          const reviews = Number(r["تعداد نظرات"]) || 0;
+          const name = r["شهر"];
+          return {
+            name,
+            deliverySat: Number(r["رضایت ارسال"]),
+            orderScore: Number(r["امتیاز سفارش"]),
+            pos: Number(r["درصد مثبت"]),
+            neu: Number(r["درصد خنثی"]),
+            neg: Number(r["درصد منفی"]),
+            reviews,
+            alert: Number(r["سیگنال هشدار"]) || 0,
+            tier: getOfficialTier(name),
+            credibility: getCredibility(reviews),
+          };
+        });
         setCities(parsed);
         const byReviews = [...parsed].sort((a, b) => b.reviews - a.reviews);
         if (byReviews[0]) setCityA(byReviews[0].name);
@@ -245,22 +514,44 @@ export default function App() {
     [dailyIssues, fromDate, toDate]
   );
 
-  const rows = useMemo(() => [...cities].sort((a, b) => b[sortKey] - a[sortKey]), [cities, sortKey]);
+  // Apply all filters
+  const filteredCities = useMemo(() => {
+    return cities.filter((c) => {
+      if (c.reviews < minReviews) return false;
+      if (selectedTiers.length > 0 && !selectedTiers.includes(c.tier)) return false;
+      if (selectedCities.length > 0 && !selectedCities.includes(c.name)) return false;
+      return true;
+    });
+  }, [cities, minReviews, selectedTiers, selectedCities]);
+
+  const rows = useMemo(() => {
+    return [...filteredCities].sort((a, b) => {
+      const diff = b[sortKey] - a[sortKey];
+      if (diff !== 0) return diff;
+      return b.reviews - a.reviews;
+    });
+  }, [filteredCities, sortKey]);
 
   const kpis = useMemo(() => {
-    if (cities.length === 0) return null;
-    const worstIssueCity = [...cities].sort((a, b) => b.alert - a.alert)[0];
-    const mostReviewed = [...cities].sort((a, b) => b.reviews - a.reviews)[0];
-    const lowest = [...cities].sort((a, b) => a.deliverySat - b.deliverySat)[0];
-    const highest = [...cities].sort((a, b) => b.deliverySat - a.deliverySat)[0];
-    return { worstIssueCity, mostReviewed, lowest, highest };
-  }, [cities]);
+    const source = filteredCities.length > 0 ? filteredCities : cities;
+    if (source.length === 0) return null;
+    const worstIssueCity = [...source].sort((a, b) => b.alert - a.alert)[0];
+    const mostReviewed = [...source].sort((a, b) => b.reviews - a.reviews)[0];
+    const lowest = [...source].sort((a, b) => a.deliverySat - b.deliverySat)[0];
+    const highest = [...source].sort((a, b) => b.deliverySat - a.deliverySat)[0];
+    return { worstIssueCity, mostReviewed, lowest, highest, count: source.length };
+  }, [filteredCities, cities]);
 
   const topTags = useMemo(() => [...tags].sort((a, b) => b.count - a.count).slice(0, 10), [tags]);
   const maxTopTagCount = useMemo(() => Math.max(1, ...topTags.map((t) => t.count)), [topTags]);
   const allTagsSorted = useMemo(() => [...tags].sort((a, b) => b.count - a.count), [tags]);
   const maxAllTagCount = useMemo(() => Math.max(1, ...allTagsSorted.map((t) => t.count)), [allTagsSorted]);
   const issueLineKeys = useMemo(() => (dailyIssues.length > 0 ? Object.keys(dailyIssues[0]).filter((k) => k !== "تاریخ") : []), [dailyIssues]);
+
+  const filteredComments = useMemo(() => {
+    if (selectedCities.length === 0) return comments;
+    return comments.filter((c) => selectedCities.includes(c.city));
+  }, [comments, selectedCities]);
 
   const dataA = useMemo(() => cities.find((c) => c.name === cityA), [cities, cityA]);
   const dataB = useMemo(() => cities.find((c) => c.name === cityB), [cities, cityB]);
@@ -275,6 +566,8 @@ export default function App() {
       { metric: "کم‌بودن هشدار", A: Math.round(alertScore(dataA)), B: Math.round(alertScore(dataB)) },
     ];
   }, [dataA, dataB]);
+
+  const comparisonCities = filteredCities.length > 0 ? filteredCities : cities;
 
   if (cities.length === 0) {
     return <div dir="rtl" className="min-h-screen bg-white text-gray-400 flex items-center justify-center">در حال خواندن دیتا از گوگل‌شیت...</div>;
@@ -291,7 +584,10 @@ export default function App() {
                 <h1 className="text-base font-bold text-gray-900">داشبورد نظرسنجی بعد از سفارش</h1>
                 <span className="text-pink-600 font-bold text-base">اسنپ‌فود</span>
               </div>
-              <p className="text-xs text-gray-400 mt-0.5">{faStr(cities.length)} شهر · داده‌ها روزانه به‌روزرسانی می‌شوند</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                {faStr(kpis?.count ?? cities.length)} شهر · داده‌ها روزانه به‌روزرسانی می‌شوند
+                {minReviews > 0 && <span className="text-pink-500"> · فیلتر اعتبار فعال (≥ {faStr(minReviews)})</span>}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-1.5 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-full px-3 py-1.5">
@@ -307,7 +603,7 @@ export default function App() {
           <KpiCard icon={MessageCircle} label="پرحجم‌ترین بازخورد" value={kpis.mostReviewed.name} sub={`${fa(kpis.mostReviewed.reviews)} نظر`} accent="gray" />
           <KpiCard icon={TrendingDown} label="پایین‌ترین رضایت ارسال" value={`${fa(kpis.lowest.deliverySat)}%`} sub={kpis.lowest.name} accent="rose" />
           <KpiCard icon={TrendingUp} label="بالاترین رضایت ارسال" value={`${fa(kpis.highest.deliverySat)}%`} sub={kpis.highest.name} accent="emerald" />
-          <KpiCard icon={Building2} label="شهرهای رصدشده" value={fa(cities.length)} sub="در حال جمع‌آوری" accent="gray" />
+          <KpiCard icon={Building2} label="شهرهای رصدشده" value={fa(kpis.count)} sub={minReviews > 0 ? `با حداقل ${faStr(minReviews)} نظر` : "در حال جمع‌آوری"} accent="gray" />
         </div>
 
         <div className="inline-flex items-center gap-1 bg-gray-100 rounded-full p-1 mb-4">
@@ -320,10 +616,23 @@ export default function App() {
 
         <FilterBar range={range} setRange={setRange} preset={preset} setPreset={setPreset} maxDataDate={maxDataDate} />
 
+        <CityTierFilter
+          cities={cities}
+          selectedCities={selectedCities}
+          setSelectedCities={setSelectedCities}
+          selectedTiers={selectedTiers}
+          setSelectedTiers={setSelectedTiers}
+          minReviews={minReviews}
+          setMinReviews={setMinReviews}
+        />
+
         {tab === 0 && (
           <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-bold text-gray-900">رتبه‌بندی شهرها</h2>
+            <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-bold text-gray-900">رتبه‌بندی شهرها</h2>
+                <span className="text-xs text-gray-400">({faStr(rows.length)} شهر)</span>
+              </div>
               <div className="flex items-center gap-2 text-xs text-gray-500">
                 مرتب‌سازی بر اساس
                 <select value={sortKey} onChange={(e) => setSortKey(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-gray-700">
@@ -334,44 +643,66 @@ export default function App() {
                 </select>
               </div>
             </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-gray-400 text-xs border-b border-gray-100">
-                  <th className="text-right py-2 font-normal">#</th>
-                  <th className="text-right py-2 font-normal">شهر</th>
-                  <th className="text-right py-2 font-normal">رضایت ارسال</th>
-                  <th className="text-right py-2 font-normal">امتیاز سفارش</th>
-                  <th className="text-right py-2 font-normal">توزیع احساسات کامنت‌ها</th>
-                  <th className="text-right py-2 font-normal">تعداد نظرات</th>
-                  <th className="text-right py-2 font-normal">سیگنال هشدار</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((c, i) => (
-                  <tr key={c.name} className={`border-b border-gray-50 hover:bg-gray-50 ${i % 2 === 1 ? "bg-gray-50/40" : ""}`}>
-                    <td className="py-3 text-gray-400">{faStr(i + 1)}</td>
-                    <td className="py-3 text-gray-900 font-medium">{c.name}</td>
-                    <td className={`py-3 font-mono ${scoreColor(c.deliverySat)}`}>{fa(c.deliverySat)}%</td>
-                    <td className="py-3 font-mono text-gray-700">★ {faFixed(c.orderScore, 2)}</td>
-                    <td className="py-3 w-40">
-                      <div className="flex h-2 rounded-full overflow-hidden bg-gray-100">
-                        <div className="bg-emerald-400" style={{ width: `${c.pos}%` }} />
-                        <div className="bg-gray-300" style={{ width: `${c.neu}%` }} />
-                        <div className="bg-rose-400" style={{ width: `${c.neg}%` }} />
-                      </div>
-                    </td>
-                    <td className="py-3 text-gray-500 font-mono">{fa(c.reviews)}</td>
-                    <td className="py-3">
-                      {c.alert > 0 ? (
-                        <span className="inline-flex items-center gap-1 text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">
-                          <AlertTriangle className="w-3 h-3" /> {fa(c.alert)}
-                        </span>
-                      ) : <span className="text-gray-300 text-xs">—</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+
+            {rows.length === 0 ? (
+              <div className="text-center py-12 text-gray-400 text-sm">
+                هیچ شهری با فیلترهای فعلی پیدا نشد. فیلتر حداقل نظرات یا Tier را تغییر دهید.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-gray-400 text-xs border-b border-gray-100">
+                      <th className="text-right py-2 font-normal">#</th>
+                      <th className="text-right py-2 font-normal">شهر</th>
+                      <th className="text-right py-2 font-normal">Tier</th>
+                      <th className="text-right py-2 font-normal">رضایت ارسال</th>
+                      <th className="text-right py-2 font-normal">امتیاز سفارش</th>
+                      <th className="text-right py-2 font-normal">توزیع احساسات</th>
+                      <th className="text-right py-2 font-normal">تعداد نظرات</th>
+                      <th className="text-right py-2 font-normal">اعتبار</th>
+                      <th className="text-right py-2 font-normal">سیگنال هشدار</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((c, i) => (
+                      <tr key={c.name} className={`border-b border-gray-50 hover:bg-gray-50 ${i % 2 === 1 ? "bg-gray-50/40" : ""}`}>
+                        <td className="py-3 text-gray-400">{faStr(i + 1)}</td>
+                        <td className="py-3 text-gray-900 font-medium">{c.name}</td>
+                        <td className="py-3">
+                          <span className="text-xs bg-gray-100 text-gray-600 rounded-full px-2 py-0.5">
+                            Tier {faStr(c.tier)}
+                          </span>
+                        </td>
+                        <td className={`py-3 font-mono ${scoreColor(c.deliverySat)}`}>{fa(c.deliverySat)}%</td>
+                        <td className="py-3 font-mono text-gray-700">★ {faFixed(c.orderScore, 2)}</td>
+                        <td className="py-3 w-36">
+                          <div className="flex h-2 rounded-full overflow-hidden bg-gray-100">
+                            <div className="bg-emerald-400" style={{ width: `${c.pos}%` }} />
+                            <div className="bg-gray-300" style={{ width: `${c.neu}%` }} />
+                            <div className="bg-rose-400" style={{ width: `${c.neg}%` }} />
+                          </div>
+                        </td>
+                        <td className="py-3 text-gray-500 font-mono">{fa(c.reviews)}</td>
+                        <td className="py-3">
+                          <span className={`inline-flex items-center gap-1 text-xs border rounded-full px-2 py-0.5 ${c.credibility.cls}`}>
+                            <ShieldCheck className="w-3 h-3" />
+                            {c.credibility.label}
+                          </span>
+                        </td>
+                        <td className="py-3">
+                          {c.alert > 0 ? (
+                            <span className="inline-flex items-center gap-1 text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">
+                              <AlertTriangle className="w-3 h-3" /> {fa(c.alert)}
+                            </span>
+                          ) : <span className="text-gray-300 text-xs">—</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
@@ -424,22 +755,29 @@ export default function App() {
             </div>
             <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
               <h2 className="text-sm font-bold text-gray-900 mb-1">نمونه نظرات منفی — اسنپ‌فود</h2>
-              <p className="text-xs text-gray-400 mb-4">آخرین نظرات منفی ثبت‌شده به همراه برچسب‌های مرتبط</p>
+              <p className="text-xs text-gray-400 mb-4">
+                آخرین نظرات منفی ثبت‌شده به همراه برچسب‌های مرتبط
+                {selectedCities.length > 0 && <span className="text-pink-500"> · فیلتر شده بر اساس شهرهای انتخابی</span>}
+              </p>
               <div className="max-h-96 overflow-y-auto space-y-3 pr-1">
-                {comments.map((c, i) => (
-                  <div key={i} className="border border-gray-100 rounded-xl p-3">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-xs text-gray-400">{c.city}</span>
-                      <span className="text-xs text-gray-300 font-mono">{faStr(c.date)}</span>
+                {filteredComments.length === 0 ? (
+                  <div className="text-center py-8 text-gray-400 text-sm">نظری با فیلتر فعلی یافت نشد.</div>
+                ) : (
+                  filteredComments.map((c, i) => (
+                    <div key={i} className="border border-gray-100 rounded-xl p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs text-gray-400">{c.city}</span>
+                        <span className="text-xs text-gray-300 font-mono">{faStr(c.date)}</span>
+                      </div>
+                      <p className="text-sm text-gray-800 mb-2">{c.text}</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {c.tags.map((tag) => (
+                          <span key={tag} className="text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">{tag}</span>
+                        ))}
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-800 mb-2">{c.text}</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {c.tags.map((tag) => (
-                        <span key={tag} className="text-xs bg-rose-50 text-rose-600 border border-rose-100 rounded-full px-2 py-0.5">{tag}</span>
-                      ))}
-                    </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -512,14 +850,14 @@ export default function App() {
         {tab === 3 && (
           <div className="space-y-4">
             <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-5">
-              <div className="flex items-center gap-3 mb-5">
+              <div className="flex items-center gap-3 mb-5 flex-wrap">
                 <span className="text-sm text-gray-500">مقایسه</span>
                 <select value={cityA} onChange={(e) => setCityA(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-pink-600 font-medium">
-                  {cities.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  {comparisonCities.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                 </select>
                 <span className="text-sm text-gray-500">در برابر</span>
                 <select value={cityB} onChange={(e) => setCityB(e.target.value)} className="bg-gray-50 border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 font-medium">
-                  {cities.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
+                  {comparisonCities.map((c) => <option key={c.name} value={c.name}>{c.name}</option>)}
                 </select>
               </div>
               {dataA && dataB && (
@@ -549,6 +887,8 @@ export default function App() {
                       <CompareRow label="درصد مثبت" a={`${fa(dataA.pos)}%`} b={`${fa(dataB.pos)}%`} />
                       <CompareRow label="درصد منفی" a={`${fa(dataA.neg)}%`} b={`${fa(dataB.neg)}%`} />
                       <CompareRow label="تعداد نظرات" a={fa(dataA.reviews)} b={fa(dataB.reviews)} />
+                      <CompareRow label="اعتبار" a={dataA.credibility.label} b={dataB.credibility.label} />
+                      <CompareRow label="Tier" a={`Tier ${faStr(dataA.tier)}`} b={`Tier ${faStr(dataB.tier)}`} />
                       <CompareRow label="سیگنال هشدار" a={fa(dataA.alert)} b={fa(dataB.alert)} />
                     </tbody>
                   </table>
