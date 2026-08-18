@@ -1,1 +1,6 @@
 @import "tailwindcss";
+@import url('https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css');
+
+@theme {
+  --font-sans: 'Vazirmatn', ui-sans-serif, system-ui, sans-serif;
+}
